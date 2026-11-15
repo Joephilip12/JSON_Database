@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Exercises the database against an isolated file for every test. */
 class DatabaseTest {
+    // Each test writes to a temporary folder provided by JUnit.
     @TempDir
     Path directory;
 
@@ -41,6 +42,7 @@ class DatabaseTest {
         assertTrue(database.set(List.of("table 1", "bill", "paid"), new JsonPrimitive(false)));
         database.initialize();
 
+        // A new Database instance reads the same file from disk.
         Database reopened = new Database(file);
         assertEquals(new JsonPrimitive(275), reopened.get(totalPath).orElseThrow());
         assertEquals(JsonParser.parseString("{\"total\":275,\"paid\":false}"),
@@ -53,6 +55,7 @@ class DatabaseTest {
         Database database = new Database(directory.resolve("db.json"));
         List<String> notePath = List.of("table 1", "bill", "note");
         assertTrue(database.set(notePath, JsonNull.INSTANCE));
+        // JSON null is a stored value. After delete, the path is missing.
         assertEquals(JsonNull.INSTANCE, database.get(notePath).orElseThrow());
         assertTrue(database.delete(notePath));
         assertTrue(database.get(notePath).isEmpty());
@@ -68,6 +71,7 @@ class DatabaseTest {
         Path file = directory.resolve("db.json");
         Database database = new Database(file);
         assertTrue(database.set(List.of("order"), JsonParser.parseString("[\"tacos\", 2]")));
+        // Capture the file before the failed operations for comparison.
         String original = Files.readString(file);
 
         List<String> blocked = List.of("order", "quantity");
@@ -96,6 +100,7 @@ class DatabaseTest {
         Database database = new Database(directory.resolve("db.json"));
         var workers = Executors.newFixedThreadPool(4);
         try {
+            // Each Future lets the test wait for one scheduled write.
             List<Future<Boolean>> writes = new ArrayList<>();
             for (int index = 0; index < 20; index++) {
                 int table = index;
@@ -105,6 +110,7 @@ class DatabaseTest {
             for (Future<Boolean> write : writes) {
                 assertTrue(write.get(5, TimeUnit.SECONDS));
             }
+            // Every table must survive the concurrent read-modify-write work.
             assertEquals(20, database.get(List.of("tables")).orElseThrow()
                     .getAsJsonObject().size());
         } finally {

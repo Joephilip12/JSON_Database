@@ -27,8 +27,7 @@ The build requires at least 80% aggregate line coverage and 80% branch
 coverage. Static analysis checks production code. The tests use temporary
 files and simulated sockets, so they can run without opening a port.
 The PMD exceptions are local to the CLI and server entry points and document
-intentional console output, loopback binding, and resource ownership. The
-SpotBugs filter allows the command processor to retain the shared database.
+intentional console output, loopback binding, and resource ownership.
 
 Generate HTML from the English Javadocs after building.
 

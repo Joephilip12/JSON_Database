@@ -23,6 +23,7 @@ import static org.mockito.Mockito.when;
 
 /** Covers client request construction and its wire format. */
 class MainTest {
+    // JUnit gives each test an isolated folder and cleans it up afterwards.
     @TempDir
     Path directory;
 
@@ -42,6 +43,7 @@ class MainTest {
         String request = """
                 {"type":"set","key":["table","total"],"value":250}
                 """;
+        // Create the file that the simulated -in option will select.
         Files.writeString(directory.resolve("request.json"), request);
         assertEquals(request, Main.parseRequest(new String[]{"-in", "request.json"}, directory));
     }
@@ -82,12 +84,15 @@ class MainTest {
     /** Verifies that the client uses the same UTF framing as the server. */
     @Test
     void writesOneUtfFrameAndReadsTheResponse() throws IOException {
+        // Prepare the same bytes that a server would send over TCP.
         ByteArrayOutputStream response = new ByteArrayOutputStream();
         try (DataOutputStream writer = new DataOutputStream(response)) {
             writer.writeUTF("{\"response\":\"OK\"}");
         }
 
         ByteArrayOutputStream sent = new ByteArrayOutputStream();
+        // Mockito supplies a fake socket backed by memory instead of TCP.
+        // Reading gets the prepared reply. Writing fills the sent buffer.
         Socket connection = mock(Socket.class);
         when(connection.getInputStream()).thenReturn(new ByteArrayInputStream(response.toByteArray()));
         when(connection.getOutputStream()).thenReturn(sent);
@@ -97,6 +102,7 @@ class MainTest {
 
         try (DataInputStream reader = new DataInputStream(new ByteArrayInputStream(sent.toByteArray()))) {
             assertEquals(request, reader.readUTF());
+            // -1 means we reached the end after exactly one request.
             assertEquals(-1, reader.read());
         }
     }

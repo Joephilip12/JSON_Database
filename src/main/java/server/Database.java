@@ -37,11 +37,14 @@ public final class Database {
      * @param file the path to the JSON database
      */
     public Database(final Path file) {
+        // Resolve the path against the working directory and simplify it.
         databaseFile = file.toAbsolutePath().normalize();
 
         // Both locks belong to the same coordinator. Writers wait for readers.
         final ReadWriteLock lock = new ReentrantReadWriteLock();
+        // Multiple workers can hold the read lock at the same time.
         readLock = lock.readLock();
+        // The write lock gives one worker exclusive access to the file.
         writeLock = lock.writeLock();
     }
 
@@ -53,6 +56,7 @@ public final class Database {
     void initialize() throws IOException {
         // The server calls this before starting its worker tasks.
         if (Files.notExists(databaseFile)) {
+            // A new JsonObject serializes to an empty object: {}.
             writeRecords(new JsonObject());
         }
     }
@@ -66,18 +70,18 @@ public final class Database {
      */
     public Optional<JsonElement> get(final List<String> path)
             throws IOException {
+        // Keep the read lock while loading and looking up the value.
         readLock.lock();
         try {
-            final JsonObject parent =
-                    findParent(readRecords(), path, false);
+            // false asks for an existing parent without creating objects.
+            final JsonObject parent = findParent(readRecords(), path, false);
             if (parent == null) {
                 return Optional.empty();
             }
-
-            // A missing property returns Java null. Gson represents a stored
-            // JSON null as a JsonNull object, so the Optional stays present.
+            // JsonNull counts as a value, so only Java null becomes empty.
             return Optional.ofNullable(parent.get(lastKey(path)));
         } finally {
+            // Release the lock even when returning early or throwing.
             readLock.unlock();
         }
     }
@@ -96,11 +100,14 @@ public final class Database {
         writeLock.lock();
         try {
             final JsonObject records = readRecords();
+            // true lets us create missing intermediate objects for set.
             final JsonObject parent = findParent(records, path, true);
             if (parent == null) {
                 return false;
             }
 
+            // For ["table 1", "bill", "total"], the parent is the bill
+            // object and the key used inside it is "total".
             final String key = lastKey(path);
             final JsonElement previous = parent.get(key);
             // Compare serialized values to distinguish 1 from 1.0.
@@ -109,7 +116,9 @@ public final class Database {
                 return true;
             }
 
+            // parent is part of records, so this updates the whole tree.
             parent.add(key, value);
+            // Save the complete JSON tree, including other tables and bills.
             writeRecords(records);
             return true;
         } finally {
@@ -125,10 +134,13 @@ public final class Database {
      * @throws IOException if the database cannot be read or written
      */
     public boolean delete(final List<String> path) throws IOException {
+        // Hold the write lock for the entire read, removal, and save.
         writeLock.lock();
         try {
             final JsonObject records = readRecords();
             final JsonObject parent = findParent(records, path, false);
+            // remove returns the old value when present. Only remove the
+            // final key, so the parent remains even if it becomes empty.
             if (parent == null || parent.remove(lastKey(path)) == null) {
                 return false;
             }
@@ -150,21 +162,23 @@ public final class Database {
      */
     private static JsonObject findParent(final JsonObject root,
             final List<String> path, final boolean createMissing) {
+        // Start at the outer JSON object. current moves one level at a time.
         JsonObject current = root;
+        // Stop before the last key. The caller acts on that final property.
         for (int index = 0; index < path.size() - 1; index++) {
             final String key = path.get(index);
-            final JsonElement child = current.get(key);
-
+            JsonElement child = current.get(key);
             if (child == null && createMissing) {
-                final JsonObject newParent = new JsonObject();
-                current.add(key, newParent);
-                current = newParent;
-            } else if (child != null && child.isJsonObject()) {
-                current = child.getAsJsonObject();
-            } else {
-                // Preserve an existing value that cannot contain properties.
+                child = new JsonObject();
+                // Attach the new object to the tree before moving into it.
+                current.add(key, child);
+            }
+            // Every intermediate step must lead to a JSON object.
+            if (child == null || !child.isJsonObject()) {
                 return null;
             }
+            // The next step now starts inside this child object.
+            current = child.getAsJsonObject();
         }
         return current;
     }
@@ -186,21 +200,19 @@ public final class Database {
      * @throws IOException if the file is unreadable or its root is invalid
      */
     private JsonObject readRecords() throws IOException {
-        final String json;
-        try {
-            json = Files.readString(databaseFile);
-        } catch (NoSuchFileException exception) {
-            return new JsonObject();
-        }
-
         final JsonElement parsed;
         try {
-            parsed = JsonParser.parseString(json);
+            // Read the text from disk, then let Gson parse the JSON tree.
+            parsed = JsonParser.parseString(Files.readString(databaseFile));
+        } catch (NoSuchFileException exception) {
+            return new JsonObject();
         } catch (JsonParseException exception) {
+            // Report corrupted JSON as a storage error.
             throw new IOException("The database contains invalid JSON.",
                     exception);
         }
 
+        // The root needs named properties, even if their values are arrays.
         if (!parsed.isJsonObject()) {
             throw new IOException("The database must contain a JSON object.");
         }
@@ -216,17 +228,20 @@ public final class Database {
     private void writeRecords(final JsonObject records) throws IOException {
         final Path directory = Objects.requireNonNull(databaseFile.getParent(),
                 "The database path must have a parent directory.");
+        // Create missing folders before opening the temporary file.
         Files.createDirectories(directory);
 
         // Keep the temporary file on the same filesystem for the atomic move.
         final Path temporaryFile =
                 Files.createTempFile(directory, "db-", ".tmp");
         try {
+            // Write the complete document before replacing the live file.
             Files.writeString(temporaryFile, records.toString());
             Files.move(temporaryFile, databaseFile,
                     StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);
         } finally {
+            // If the move failed, remove the leftover temporary file.
             Files.deleteIfExists(temporaryFile);
         }
     }
